@@ -1,3 +1,4 @@
 *.env*
 *.log*
 .directory
+__pycache__/
