@@ -1,14 +1,15 @@
 from mysql.connector import connect, Error, connection,cursor
 from datetime import datetime, timedelta
+from urllib import request as url_request
 from dateutil.parser import parse
 from dotenv import load_dotenv
-from pprint import pprint as pp
 from pydantic import BaseModel
 from typing import Tuple,List,Dict, Union
 import os,logging, argparse, json
 from generacion_xmls import generar_xmls, get_values_json
 
 class Crudos(BaseModel):
+    """Clase para guardar los atributos de la consulta de la tabla crudos"""
     id: int
     contador_id: int
     registros: str 
@@ -16,6 +17,12 @@ class Crudos(BaseModel):
     created: datetime
     plaza_id: int
     json_text: Union[str,None]
+    
+class Contador(BaseModel):
+    """Clase para guardar los atributos de la consulta de la tabla contador"""
+    mac: str
+    num_serie: str
+    contador_id: int
 
 def get_environvar(var_name: str)->str:
     """Obtiene el valor de las variables de entorno sensibles"""
@@ -36,7 +43,7 @@ def database_connection(args=Dict[str,str])-> Tuple[connection.MySQLConnection,c
     try:
         connection=connect(**args)
         if connection.is_connected():
-            cursor=connection.cursor()
+            cursor=connection.cursor(buffered=True)
             cursor.execute('select database();')
             result=cursor.fetchone()
             if result[0] is None:
@@ -52,16 +59,26 @@ def database_connection(args=Dict[str,str])-> Tuple[connection.MySQLConnection,c
         logging.info('\nFecha y hora de finalización: '+datetime.now().strftime('%Y-%m-%d %H:%M:%S')+'\n-------------------------------\n\n')
         quit()
         
-def pm_counter(cursor: cursor.MySQLCursor, mac:str) -> Tuple[str,str,int]:
+def pm_counter(cursor: cursor.MySQLCursor, mac:str) -> List[Contador]:
+    """Obtiene valores de la tabla contadores"""
+    contadores: List[Contador] = []
+    query_string='SELECT pm_simulados.mac, contadores.num_serie, contadores.id as contador_id FROM pogen_contadores.pm_simulados_contadores'\
+                        ' left join pogen_contadores.pm_simulados on pm_simulados.id = pm_simulados_contadores.pm_simulado_id'\
+                        ' left join pogen_contadores.contadores on contadores.id = pm_simulados_contadores.contador_id'\
+                        f' where contadores.tipo = "4d"'
+    if mac!='':
+        query_string+=f' and pm_simulados.mac="{mac}"'
+        
     try:
-        cursor.execute('SELECT pm_simulados.mac, contadores.num_serie, contadores.id as contador_id FROM pogen_contadores.pm_simulados_contadores'
-                        ' left join pogen_contadores.pm_simulados on pm_simulados.id = pm_simulados_contadores.pm_simulado_id'
-                        ' left join pogen_contadores.contadores on contadores.id = pm_simulados_contadores.contador_id'
-                        f' where contadores.tipo = "4d" and pm_simulados.mac = "{mac}"')
-        result=cursor.fetchone()
-        return result
+        cursor.execute(query_string)
+        results=cursor.fetchall()
+        for result in results:
+            contador=Contador(mac=result[0],num_serie=result[1],contador_id=result[2])
+            contadores.append(contador)
     except Error as e:
         logging.critical(str(e))
+    finally:
+        return contadores
         
 def sensors_id(cursor: cursor.MySQLCursor, num_serie: str, plaza_id: str) -> Tuple[int,int]:
     """Obtiene los valores del campo de acceso id y sensores id de un sensor"""
@@ -113,9 +130,12 @@ def get_crudos(cursor: cursor.MySQLCursor, huecos: List[str], contador_id: int, 
                             f' where contador_id = {contador_id} and plaza_id = {plaza_id}'
                             f' and fecha_utc > "{fecha} {first_hour}" and fecha_utc < "{fecha} {secound_hour}"')
             result=cursor.fetchone()
-            c=Crudos(id=result[0],contador_id=result[1],registros=result[2],fecha_utc=result[3],created=result[4],plaza_id=result[5],json_text=result[6])
-            records.append(c)
-            logging.info('Registro complteado!')
+            if result is None:
+                logging.info('No existen registros para este hueco.')
+            else:
+                c=Crudos(id=result[0],contador_id=result[1],registros=result[2],fecha_utc=result[3],created=result[4],plaza_id=result[5],json_text=result[6])
+                records.append(c)
+                logging.info('Registro complteado!')
         except Exception as e:
             logging.critical('Error en la función get_crudos: '+str(e))
     return records
@@ -123,7 +143,7 @@ def get_crudos(cursor: cursor.MySQLCursor, huecos: List[str], contador_id: int, 
 def generate_xml(crudos: Crudos) -> str:
     """Función para generar el xml para enviar a PogenData"""
     try:
-        logging.info('Obteniendo el del objeto '+repr(crudos))
+        logging.info('Obteniendo json del objeto '+repr(crudos))
         """
         crudos_dict=json.loads(crudos.registros)
         crudos_count=[crudos_dict[c] for c in crudos_dict]
@@ -142,6 +162,35 @@ def generate_xml(crudos: Crudos) -> str:
     except Exception as e:
         logging.critical('Error en la función generate_xml: '+str(e))
 
+def post_xml(xml_data: str, ocupacion=0, plaza_id=None)-> None:
+    try:
+        if ocupacion == 0:
+            url = "http://www.sistema.pogen.mx/parserv1.php"
+        else:
+            url = "http://xmls.pogendata.com/xml"
+        logging.info('Hora de la opreación '+datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        if plaza_id:
+            logging.info('Envíando xml de la plaza '+plaza_id+' hacía la url '+url)
+        else:
+            logging.info('Envíando el xml hacía la url '+url)
+        data = str.encode(xml_data)
+        conn = url_request.Request(url=url, data=data)
+        resp = url_request.urlopen(conn)
+        status_code = resp.getcode()
+        respuesta = resp.read().decode("UTF-8")
+        if status_code == 200 and "Download Complete" in respuesta:
+            logging.info('Archivo XML envíado con éxito!')
+            return True
+        else:
+
+            logging.warning('Ha ocurrido algo inesperado en la petición al servidor')
+            logging.warning('Status code: '+str(status_code))
+            logging.warning('Respuesta de la petición:' +str(respuesta))
+            logging.warning('XML envíado: \n'+xml_data)
+    except Exception as e:
+        logging.critical('Ha ocurrido un error en la función post_xml: '+str(e))
+
+
 def main():
     
     #region settings
@@ -149,11 +198,18 @@ def main():
     logging.basicConfig(level='DEBUG',filename=os.path.join(root,'app.log'))
     parser=argparse.ArgumentParser(description='Script para analizar huecos de datos')
     parser.add_argument('--fecha',help='Fecha de los registros a analizar dentro de la base de datos', type=str,nargs='?',const=1,default='')
-    parser.add_argument('--mac',help='Dirección mac del sensor que se quiere analizar',type=str)
+    parser.add_argument('--mac',help='Dirección mac del sensor que se quiere analizar',type=str,nargs='?',const=1,default='')
+    parser.add_argument('--upload',help="Si quiere que los resultados se suban a PogenData introduzca 'y' o 'Y', si no necesita subir datos introduzca cualquier otra cosa o deje en el argumento blanco ",
+                        type=str,nargs='?',const=1,default='n')
+    parser.add_argument('--output',help='Carpeta en donde se van a generar los archivos xml',type=str,nargs='?',const=1,default=os.path.join(root,'xml'))
     args=parser.parse_args()
     #endregion
     
     logging.info('\n-------------------------------\nFecha y hora de ejecución: '+datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    execution_hour=datetime.now().strftime('%H:%M:%S')
+    dirname=os.path.join(args.output,datetime.now().strftime('%Y-%m-%d'),execution_hour)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
     
     #region database config
     down_config={
@@ -185,33 +241,57 @@ def main():
     #region Proceso
     logging.info('Recuperando datos de la tabla contadores...')
     contadores=pm_counter(cur_d,args.mac) #paso 1
-    if contadores == None:
-        logging.warning('No se han encontrado resultados del query para la tabla contadores para la mac '+args.mac)
+    logging.info('Datos recuperados sin problemas.')
+
+    if len(contadores) == None:
+        logging.warning('No se han encontrado resultados del query para la tabla contadores para los parámetros especificados')
         logging.info('\nFecha y hora de finalización: '+datetime.now().strftime('%Y-%m-%d %H:%M:%S')+'\n-------------------------------\n\n')
         quit()
-    mac=contadores[0]
-    num_serie=contadores[1]
-    contador_id=contadores[2]
-    logging.info('Datos recuperados sin problemas.')
-    cur_a.execute(f'select foreign_key as plaza_id from equipos where numero_de_serie = "{mac}" and activo = 1;') #paso 2
-    result=cur_a.fetchone()
-    plaza_id=result[0]
-    #acceso_id, sensor_id=sensors_id(cur_a,num_serie,plaza_id) #paso 3 
+        
     date= datetime.now().strftime('%Y-%m-%d') if args.fecha=='' else args.fecha[:4]+'-'+args.fecha[4:6]+'-'+args.fecha[6:]
-    huecos=time_gaps(cur_a,date,plaza_id) #Paso 4, nota, el paso 5 ya lo tenemos con contador_id
-    #endregion
-    
-    #region xml
-    if len(huecos)>0:
-        logging.info('Se han encontrado varios huecos de hora para el día '+date+': '+str(huecos))
-        xml_list: List[str] = []
-        records=get_crudos(cur_d,huecos,contador_id,plaza_id,date) #paso 6
-        for record in records:
-            xml_string=generate_xml(record)
-            print(xml_string)
-            xml_list.append(xml_string)  
-    else:
-        logging.info('No se han encontrado huecos entre las horas para el sensor '+args.mac+' del día '+date)
+    for contador in contadores:
+        #region obtención huecos
+        mac=contador.mac
+        num_serie=contador.num_serie
+        contador_id=contador.contador_id
+        logging.info('\n\nObteniendo el id de la plaza para el contador '+mac)
+        cur_a.execute(f'select foreign_key as plaza_id from equipos where numero_de_serie = "{mac}" and activo = 1;') #paso 2
+        result=cur_a.fetchone()
+        if result is None:
+            logging.warning('No existe un id plaza para el contador '+mac)
+            continue
+        plaza_id=result[0]
+        #acceso_id, sensor_id=sensors_id(cur_a,num_serie,plaza_id) #paso 3 
+        huecos=time_gaps(cur_a,date,plaza_id) #Paso 4, nota, el paso 5 ya lo tenemos con contador_id
+        #endregion
+        
+        #region xml
+        if len(huecos)>0:
+            logging.info('Se han encontrado varios huecos de hora para el día '+date+': '+str(huecos))
+            filename=mac+' '+args.fecha+' .txt'
+            
+            records=get_crudos(cur_d,huecos,contador_id,plaza_id,date) #paso 6
+            for record in records:
+                xml_string=generate_xml(record)
+                if xml_string is not None:
+                    if args.upload=='Y' or args.upload=='y':
+                        post_xml(xml_string)
+                    else:
+                        f=open(os.path.join(dirname,filename),"w+")
+                        logging.info('Agregando info. al archivo '+dirname+'...')
+                        f.write('\n '+xml_string)
+                        logging.info('Información agregada sin problemas')
+                        f.close()
+            
+        else:
+            logging.info('No se han encontrado huecos (o datos en los huecos) entre las horas para el sensor '+mac+' del día '+date)
+            
+        #Limpieza de datos
+        huecos.clear()
+        records.clear()
+        #endregion
+
+        
     #endregion   
      
     #region end

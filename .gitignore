@@ -1,4 +1,6 @@
 *.env*
 *.log*
+*xml*
 .directory
 __pycache__/
+
