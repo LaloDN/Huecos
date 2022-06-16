@@ -16,7 +16,7 @@ class Crudos(BaseModel):
     fecha_utc: datetime
     created: datetime
     plaza_id: int
-    json_text: Union[str,None]
+    json_text: Union[str,None] = None
     
 class Contador(BaseModel):
     """Clase para guardar los atributos de la consulta de la tabla contador"""
@@ -53,6 +53,7 @@ def database_connection(args=Dict[str,str])-> Tuple[connection.MySQLConnection,c
             return connection,cursor
         logging.critical('No se ha podido establecer la conexión al host indicado.')
         logging.info('\nFecha y hora de finalización: '+datetime.now().strftime('%Y-%m-%d %H:%M:%S')+'\n-------------------------------\n\n')
+        quit()
     except Error as e:
         print('Ha ocurrido algo inesperado en la conexión a la base de datos, terminando la ejecución del script...')
         logging.critical(str(e))
@@ -80,7 +81,7 @@ def pm_counter(cursor: cursor.MySQLCursor, mac:str) -> List[Contador]:
     finally:
         return contadores
         
-def sensors_id(cursor: cursor.MySQLCursor, num_serie: str, plaza_id: str) -> Tuple[int,int]:
+def sensors_id(cursor: cursor.MySQLCursor, num_serie: str, plaza_id: int) -> Tuple[int,int]:
     """Obtiene los valores del campo de acceso id y sensores id de un sensor"""
     try:
         logging.info('Obteniendo el acceso_id y sensor_id...')
@@ -140,17 +141,13 @@ def get_crudos(cursor: cursor.MySQLCursor, huecos: List[str], contador_id: int, 
             logging.critical('Error en la función get_crudos: '+str(e))
     return records
  
-def generate_xml(crudos: Crudos) -> str:
+def generate_xml(crudos: Crudos) -> Union[str,None]:
     """Función para generar el xml para enviar a PogenData"""
     try:
         logging.info('Obteniendo json del objeto '+repr(crudos))
-        """
-        crudos_dict=json.loads(crudos.registros)
-        crudos_count=[crudos_dict[c] for c in crudos_dict]
-        full_val = '{"CountLogs": [{"ClockChangedFrom": "2022-06-03T19:55:16Z", "Timestamp": "2022-06-03T20:15:28Z", "TimestampLocaltime": "2022-06-03T15:15:28-05:00"}, {"Counts": '+str(crudos_count).replace("'",'"')+', "LogEntryId": 53121, "StartTimestamp": "2022-06-03T19:50:00Z", "StartTimestampLocaltime": "2022-06-03T14:50:00-05:00", "Timestamp": "2022-06-03T20:20:00Z", "TimestampLocaltime": "2022-06-03T15:20:00-05:00"}], "DeviceID": "D001", "DeviceName": "DefaultName", "EnableDST": true, "FriendlyDeviceSerial": "'+num_serie+'", "HistogramLogs": [{"ClockChangedFrom": "2022-06-03T19:55:16Z", "Timestamp": "2022-06-03T20:15:28Z", "TimestampLocaltime": "2022-06-03T15:15:28-05:00"}, {"Histograms": [], "LogEntryId": 53120, "StartTimestamp": "2022-06-03T19:50:00Z", "StartTimestampLocaltime": "2022-06-03T14:50:00-05:00", "Timestamp": "'+crudos.fecha_utc.strftime('%Y-%m-%dT%H:%M:%S')+'", "TimestampLocaltime": "2022-06-03T15:20:00-05:00"}], "IPv4Address": "192.168.1.54", "IPv6Address": "::", "SiteID": "S001", "SiteName": "DefaultSiteName", "TimeZone": "America/Mexico_City", "UserString": "-", "macAddress": "'+mac_address+'"}'    
-        full_dict = json.loads(full_val)
-
-        """
+        if crudos.json_text is None:
+            logging.warning('El objeto no tiene ningún valor para la propiedad json_text')
+            return None
         full_dict=json.loads(crudos.json_text)
         test = get_values_json(full_dict)
         logging.info('Json y valores generados con éxito!')
@@ -180,7 +177,6 @@ def post_xml(xml_data: str, ocupacion=0, plaza_id=None)-> None:
         respuesta = resp.read().decode("UTF-8")
         if status_code == 200 and "Download Complete" in respuesta:
             logging.info('Archivo XML envíado con éxito!')
-            return True
         else:
 
             logging.warning('Ha ocurrido algo inesperado en la petición al servidor')
@@ -189,7 +185,6 @@ def post_xml(xml_data: str, ocupacion=0, plaza_id=None)-> None:
             logging.warning('XML envíado: \n'+xml_data)
     except Exception as e:
         logging.critical('Ha ocurrido un error en la función post_xml: '+str(e))
-
 
 def main():
     
@@ -210,7 +205,7 @@ def main():
     dirname=os.path.join(args.output,datetime.now().strftime('%Y-%m-%d'),execution_hour)
     if not os.path.exists(dirname):
         os.makedirs(dirname)
-    
+        
     #region database config
     down_config={
         'user':get_environvar('down_user'),
@@ -243,7 +238,7 @@ def main():
     contadores=pm_counter(cur_d,args.mac) #paso 1
     logging.info('Datos recuperados sin problemas.')
 
-    if len(contadores) == None:
+    if len(contadores) == 0:
         logging.warning('No se han encontrado resultados del query para la tabla contadores para los parámetros especificados')
         logging.info('\nFecha y hora de finalización: '+datetime.now().strftime('%Y-%m-%d %H:%M:%S')+'\n-------------------------------\n\n')
         quit()
@@ -282,13 +277,13 @@ def main():
                         f.write('\n '+xml_string)
                         logging.info('Información agregada sin problemas')
                         f.close()
-            
+            #Limpieza de datos
+            records.clear()
         else:
             logging.info('No se han encontrado huecos (o datos en los huecos) entre las horas para el sensor '+mac+' del día '+date)
             
         #Limpieza de datos
         huecos.clear()
-        records.clear()
         #endregion
 
         
@@ -303,4 +298,9 @@ def main():
     #endregion
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.critical('Ha ocurrido un error que ha detenido la ejecución del script')
+        logging.critical(str(e))
+        logging.info('\nFecha y hora de finalización: '+datetime.now().strftime('%Y-%m-%d %H:%M:%S')+'\n-------------------------------\n\n')
