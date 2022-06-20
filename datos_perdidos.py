@@ -263,7 +263,7 @@ def main():
         #region xml
         if len(huecos)>0:
             logging.info('Se han encontrado varios huecos de hora para el día '+date+': '+str(huecos))
-            filename=mac+' '+args.fecha+' .txt'
+            filename=mac+' '+args.fecha+'.txt'
             
             records=get_crudos(cur_d,huecos,contador_id,plaza_id,date) #paso 6
             for record in records:
