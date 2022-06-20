@@ -12,10 +12,10 @@ class Crudos(BaseModel):
     """Clase para guardar los atributos de la consulta de la tabla crudos"""
     id: int
     contador_id: int
-    registros: str 
+    plaza_id: int
     fecha_utc: datetime
     created: datetime
-    plaza_id: int
+    registros: str 
     json_text: Union[str,None] = None
     
 class Contador(BaseModel):
@@ -122,7 +122,6 @@ def get_crudos(cursor: cursor.MySQLCursor, huecos: List[str], contador_id: int, 
     """Función para obtener los registros perdidos de ciertos intervalos de horas"""
     records : List[Crudos] = []
     for hueco in huecos:
-        logging.info('Obteniendo el primer registro para la hora '+hueco)
         try:
             hour=parse(hueco)
             first_hour=(hour-timedelta(minutes=1)).strftime('%H:%M:%S')
@@ -131,14 +130,15 @@ def get_crudos(cursor: cursor.MySQLCursor, huecos: List[str], contador_id: int, 
                             f' where contador_id = {contador_id} and plaza_id = {plaza_id}'
                             f' and fecha_utc > "{fecha} {first_hour}" and fecha_utc < "{fecha} {secound_hour}"')
             result=cursor.fetchone()
-            if result is None:
-                logging.info('No existen registros para este hueco.')
-            else:
+            if result is not None:
+                logging.info('Obteniendo el primer registro para la hora '+hueco)
                 c=Crudos(id=result[0],contador_id=result[1],registros=result[2],fecha_utc=result[3],created=result[4],plaza_id=result[5],json_text=result[6])
                 records.append(c)
                 logging.info('Registro complteado!')
         except Exception as e:
             logging.critical('Error en la función get_crudos: '+str(e))
+    if len(records)==0:
+        logging.info('No se encontraron datos registrados para las horas que tienen hueco.')
     return records
  
 def generate_xml(crudos: Crudos) -> Union[str,None]:
@@ -272,15 +272,18 @@ def main():
                     if args.upload=='Y' or args.upload=='y':
                         post_xml(xml_string)
                     else:
-                        f=open(os.path.join(dirname,filename),"w+")
-                        logging.info('Agregando info. al archivo '+dirname+'...')
+                        if os.path.exists( os.path.join(dirname,filename) ):
+                            f=open(os.path.join(dirname,filename),"a")
+                        else:
+                            f=open(os.path.join(dirname,filename),"w")
+                        logging.info('Agregando info. al archivo '+dirname+'/'+filename+'...')
                         f.write('\n '+xml_string)
                         logging.info('Información agregada sin problemas')
                         f.close()
             #Limpieza de datos
             records.clear()
         else:
-            logging.info('No se han encontrado huecos (o datos en los huecos) entre las horas para el sensor '+mac+' del día '+date)
+            logging.info('No se han encontrado huecos entre las horas para el sensor '+mac+' del día '+date)
             
         #Limpieza de datos
         huecos.clear()
