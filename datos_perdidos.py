@@ -23,16 +23,16 @@ class Contador(BaseModel):
     mac: str
     num_serie: str
     contador_id: int
-
+    
 def get_environvar(var_name: str)->str:
     """Obtiene el valor de las variables de entorno sensibles"""
     try:
         root=os.path.dirname(os.path.realpath(__file__))
-        os.system('gpg '+root+'/.env.gpg')
+        #os.system('gpg '+root+'/.env.gpg')
         load_dotenv()
         variable=os.environ.get(var_name)
-        if os.path.exists(root+'/.env'):
-            os.remove(root+'/.env')
+        #if os.path.exists(root+'/.env'):
+            #os.remove(root+'/.env')
         return variable
     except:
         print('Error: no ocurrido algo inesperado al buscar la variable de entorno '+var_name)
@@ -106,29 +106,51 @@ def time_gaps(cursor: cursor.MySQLCursor, date: str, plaza_id:int) -> List[str]:
                         f' where plaza_id = {plaza_id} and date(fecha) = "{date}";')
         results=cursor.fetchall()
         #Primero se obtiene el campo de la fecha y hora
-        dates=[result[4] for result in results]
+        dates=[result[3] for result in results] 
         #Después se obtiene únicamente las horas
         hours=[int(date.strftime('%H')) for date in dates]
-        for i in range(0,24):
-            if i not in hours:
-                huecos.append(str(i)+':00:00')
+        if len(hours)>0:
+            hours.sort()
+            first_hour=hours[0]+6
+            last_hour=hours[-1]+6
+            if first_hour>=24:
+                first_hour-=24
+            if last_hour>=24:
+                last_hour-=24
+            logging.info('Primera hora (timestamp) detectada: '+str(first_hour))
+            logging.info('Última hora (timestap) detectada: '+str(last_hour))
+            for i in range(hours[0],hours[-1]):
+                if i not in hours:
+                    timestamp=i+6
+                    if timestamp>=24:
+                        timestamp-=24
+                    huecos.append(str(timestamp)+':00:00')
         logging.info('Se ha terminado el análisis para los huecos.')
     except Exception as e:
         logging.critical(str(e))
     finally:
         return huecos 
              
+def query_dates(hour: str,date: str) -> Tuple[str,str]:
+    """Función para obtener las fehas y las horas para ejecutar el query de get_crudos"""
+    num=int(hour.split(':')[0])
+    date_dt=parse(date+' '+hour)
+    # Las horas de 0 a 5 son del día siguiente en el timestamp.
+    if num >=0 or num <=5:
+            date_dt+=timedelta(days=1)
+    first_hour=(date_dt-timedelta(seconds=1)).strftime('%Y-%m-%d %H:%M:%S')
+    second_hour=(date_dt+timedelta(minutes=60)).strftime('%Y-%m-%d %H:%M:%S')
+    return first_hour,second_hour
+          
 def get_crudos(cursor: cursor.MySQLCursor, huecos: List[str], contador_id: int, plaza_id: int, fecha: str) -> List[Crudos]:
     """Función para obtener los registros perdidos de ciertos intervalos de horas"""
     records : List[Crudos] = []
     for hueco in huecos:
         try:
-            hour=parse(hueco)
-            first_hour=(hour-timedelta(minutes=1)).strftime('%H:%M:%S')
-            secound_hour=(hour+timedelta(minutes=60)).strftime('%H:%M:%S')
+            first_hour,second_hour=query_dates(hueco,fecha)
             cursor.execute('select * from pogen_contadores.registros_crudos'
                             f' where contador_id = {contador_id} and plaza_id = {plaza_id}'
-                            f' and fecha_utc > "{fecha} {first_hour}" and fecha_utc < "{fecha} {secound_hour}"')
+                            f' and fecha_utc > "{first_hour}" and fecha_utc < "{second_hour}"')
             result=cursor.fetchone()
             if result is not None:
                 logging.info('Obteniendo el primer registro para la hora '+hueco)
@@ -192,7 +214,10 @@ def main():
     root=os.path.dirname(os.path.realpath(__file__))
     logging.basicConfig(level='DEBUG',filename=os.path.join(root,'app.log'))
     parser=argparse.ArgumentParser(description='Script para analizar huecos de datos')
-    parser.add_argument('--fecha',help='Fecha de los registros a analizar dentro de la base de datos', type=str,nargs='?',const=1,default='')
+    today=datetime.now()
+    yesterday=(today-timedelta(days=1)).strftime('%Y%m%d')
+    today=today.strftime('%Y%m%d')
+    parser.add_argument('--fecha',help='Fecha de los registros a analizar dentro de la base de datos', type=str,nargs='?',const=1,default=today+','+yesterday)
     parser.add_argument('--mac',help='Dirección mac del sensor que se quiere analizar',type=str,nargs='?',const=1,default='')
     parser.add_argument('--upload',help="Si quiere que los resultados se suban a PogenData introduzca 'y' o 'Y', si no necesita subir datos introduzca cualquier otra cosa o deje en el argumento blanco ",
                         type=str,nargs='?',const=1,default='n')
@@ -234,60 +259,62 @@ def main():
     #endregion
         
     #region Proceso
-    logging.info('Recuperando datos de la tabla contadores...')
-    contadores=pm_counter(cur_d,args.mac) #paso 1
-    logging.info('Datos recuperados sin problemas.')
+    fechas:List[str]=args.fecha.split(',')
+    for f in fechas:
+        date=f[:4]+'-'+f[4:6]+'-'+f[6:]
+        logging.info('\n\nInicando análisis para la fecha '+date)
+        logging.info('Recuperando datos de la tabla contadores...')
+        contadores=pm_counter(cur_d,args.mac) #paso 1
+        logging.info('Datos recuperados sin problemas.')
 
-    if len(contadores) == 0:
-        logging.warning('No se han encontrado resultados del query para la tabla contadores para los parámetros especificados')
-        logging.info('\nFecha y hora de finalización: '+datetime.now().strftime('%Y-%m-%d %H:%M:%S')+'\n-------------------------------\n\n')
-        quit()
-        
-    date= datetime.now().strftime('%Y-%m-%d') if args.fecha=='' else args.fecha[:4]+'-'+args.fecha[4:6]+'-'+args.fecha[6:]
-    for contador in contadores:
-        #region obtención huecos
-        mac=contador.mac
-        num_serie=contador.num_serie
-        contador_id=contador.contador_id
-        logging.info('\n\nObteniendo el id de la plaza para el contador '+mac)
-        cur_a.execute(f'select foreign_key as plaza_id from equipos where numero_de_serie = "{mac}" and activo = 1;') #paso 2
-        result=cur_a.fetchone()
-        if result is None:
-            logging.warning('No existe un id plaza para el contador '+mac)
+        if len(contadores) == 0:
+            logging.warning('No se han encontrado resultados del query para la tabla contadores para los parámetros especificados')
             continue
-        plaza_id=result[0]
-        #acceso_id, sensor_id=sensors_id(cur_a,num_serie,plaza_id) #paso 3 
-        huecos=time_gaps(cur_a,date,plaza_id) #Paso 4, nota, el paso 5 ya lo tenemos con contador_id
-        #endregion
-        
-        #region xml
-        if len(huecos)>0:
-            logging.info('Se han encontrado varios huecos de hora para el día '+date+': '+str(huecos))
-            filename=mac+' '+args.fecha+'.txt'
             
-            records=get_crudos(cur_d,huecos,contador_id,plaza_id,date) #paso 6
-            for record in records:
-                xml_string=generate_xml(record)
-                if xml_string is not None:
-                    if args.upload=='Y' or args.upload=='y':
-                        post_xml(xml_string)
-                    else:
-                        if os.path.exists( os.path.join(dirname,filename) ):
-                            f=open(os.path.join(dirname,filename),"a")
+        for contador in contadores:
+            #region obtención huecos
+            mac=contador.mac
+            num_serie=contador.num_serie
+            contador_id=contador.contador_id
+            logging.info('\n\nObteniendo el id de la plaza para el contador '+mac)
+            cur_a.execute(f'select foreign_key as plaza_id from equipos where numero_de_serie = "{mac}" and activo = 1;') #paso 2
+            result=cur_a.fetchone()
+            if result is None:
+                logging.warning('No existe un id plaza para el contador '+mac)
+                continue
+            plaza_id=result[0]
+            #acceso_id, sensor_id=sensors_id(cur_a,num_serie,plaza_id) #paso 3 
+            huecos=time_gaps(cur_a,date,plaza_id) #Paso 4, nota, el paso 5 ya lo tenemos con contador_id
+            #endregion
+            
+            #region xml
+            if len(huecos)>0:
+                logging.info('Se han encontrado varios huecos de hora para el día '+date+': '+str(huecos))
+                filename=mac+' '+args.fecha+'.txt'
+                
+                records=get_crudos(cur_d,huecos,contador_id,plaza_id,date) #paso 6
+                for record in records:
+                    xml_string=generate_xml(record)
+                    if xml_string is not None:
+                        if args.upload=='Y' or args.upload=='y':
+                            post_xml(xml_string)
                         else:
-                            f=open(os.path.join(dirname,filename),"w")
-                        logging.info('Agregando info. al archivo '+dirname+'/'+filename+'...')
-                        f.write('\n '+xml_string)
-                        logging.info('Información agregada sin problemas')
-                        f.close()
+                            if os.path.exists( os.path.join(dirname,filename) ):
+                                f=open(os.path.join(dirname,filename),"a")
+                            else:
+                                f=open(os.path.join(dirname,filename),"w")
+                            logging.info('Agregando info. al archivo '+dirname+'/'+filename+'...')
+                            f.write('\n '+xml_string)
+                            logging.info('Información agregada sin problemas')
+                            f.close()
+                #Limpieza de datos
+                records.clear()
+            else:
+                logging.info('No se han encontrado huecos entre las horas para el sensor '+mac+' del día '+date)
+                
             #Limpieza de datos
-            records.clear()
-        else:
-            logging.info('No se han encontrado huecos entre las horas para el sensor '+mac+' del día '+date)
-            
-        #Limpieza de datos
-        huecos.clear()
-        #endregion
+            huecos.clear()
+            #endregion
 
         
     #endregion   

@@ -1,6 +1,8 @@
 *.env*
 *.log*
 *xml*
+*/*
+prueba.py
 .directory
-__pycache__/
+
 
