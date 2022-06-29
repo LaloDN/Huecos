@@ -1,15 +1,17 @@
 # Script de huecos en horarios
 
 ## Contenido
-1. [main](#función-main)
-2. [get_environvar](#función-getenvironvar)
-3. [database_connection](#función-databaseconnection)
-4. [pm_counter](#función-pmcounter)
-5. [sensors_id](#función-sensorsid)
-6. [time_gaps](#función-timegaps)
-7. [get_crudos](#función-getcrudos)
-8. [generate_xml](#función-generatexml)
-9. [post_xml](#función-postxml)
+1. [main](#main)
+2. [get_environvar](#getenvironvar)
+3. [database_connection](#databaseconnection)
+4. [pm_counter](#pmcounter)
+5. [sensors_id](#sensorsid)
+6. [time_gaps](#timegaps)
+7. [get_crudos](#getcrudos)
+8. [generate_xml](#generatexml)
+9. [post_xml](#postxml)
+
+<a name="main"></a>
 
 # Función main
 
@@ -78,6 +80,9 @@ Pero en dado caso que xml_string resulte ser un string, hay dos operaciones que 
 
 Después de esto, se termina con el proceso de un registro en la lista contadores y se itera el siguiente, y una vez que termine el ciclo for, se termina la ejecución del script.
 
+
+<a name="getenvironvar"></a>
+
 # Función get_environvar
 
 > Recibe: var_name: un string con el valor de la variable de entorno a obtener.
@@ -86,6 +91,9 @@ Después de esto, se termina con el proceso de un registro en la lista contadore
 Esta función ejecuta un comando de bash para desencriptar un archivo llamado .env.gpg que está ubicado dentro del mismo directorio del script y generá un archivo .env, con load_dotenv() se lee la información del archivo .env, se lee el valor de la variable con el nombre especifícado en var_name y lo retorna, por último elimina el archivo .env con el texto plano por seguridad.
 
 ***Nota: se puede cambiar la ubicación de en donde está contenido el archivo .env.gpg, pero tendrá que editarlo dentro de la función (y el nombre del archivo de texto plano .env no se puede cambiar, siempre tiene que ser el mismo)***
+
+
+<a name="databaseconnection"></a>
 
 # Función database_connection
 
@@ -100,6 +108,8 @@ Lo primero que se hace es crear la conexión a la base de datos con los parámet
 
 Pero si la conexión fue establecida con éxito, entonces ahora se procede a crear un cursor de la base de datos, después se ejecuta una consulta para ver que se haya seleccionado una base de datos correctamente, si la consulta no trae ningún resultado (None), se lanza un error a los logs y se termina con la ejecución del script, en caso contrario, significa que si se ha seleccionado la base de datos correctamente, por lo que retorna el cursor y la conexión una vez comprobada esta información.
 
+<a name="pmcounter"></a>
+
 # Función pm_counter
 
 > Recibe: cursor: un cursor de una base de datos de MySQL, mac: un string con el valor del argumento mac del argparse.
@@ -112,6 +122,9 @@ Pero es posible filtrar los resultados y reducir la búsqueda a un solo contador
 Una vez establecido el valor de query_string, se ejecuta la consulta, se itera sobre las lineas de los resultados y cada registro lo va a adaptar y lo va a guardar a un objeto Contador, el cuál fue modelado para almacenar los valores de esta consulta, y cada objeto contador lo guarda en la lista contadores.
 Al finalizar el ciclo for, la función retorna la lista de contadores.
 
+
+<a name="sensorsid"></a>
+
 # Función sensors_id
 
 > Recibe: cursor: un cursor de una base de datos de MySQL, num_serie: un string con el numero de serie de un contador, plaza_id: un string del id de la plaza a la que esta ligada el sensor.
@@ -121,6 +134,8 @@ Al finalizar el ciclo for, la función retorna la lista de contadores.
 Esta función consta de una consulta hacía la tabla sensores, en donde traerá la información de los campos acceso_id y sensores_id de la tabla sensores, el cuál filtrara los resultados en donde tengan el mismo id de plaza que el del parámetro y el mismo numero se serie, además de que se encuentren activos.
 
 Se ejecuta el query, se toma la primera línea del resultado y este se envía como valor de retorno.
+
+<a name="timegaps"></a>
 
 # Función time_gaps
 
@@ -142,6 +157,8 @@ La operación para obtener los huecos es simple, con un for se va a iterar los n
 
 Al finalizar la iteración se retorna la lista huecos.
 
+<a name="querydates"></a>
+
 # Función query_dates
 > Recibe: hour: un string de una hora en formato HH:MM:SS, date: un string de una fecha en formato YYYY-MM-DD
 > Retorna: una tupla de dos strings de dos fechas distintas con un rango de una hora entre ellas
@@ -152,6 +169,8 @@ Para empezar, del parámetro hour se extrae el primer valor antes de los dos pun
 Supongamos que vamos a analizar los registros de un día cualquiera, por ejemplo, un día 26, dentro de la base de datos en la tablas suele haber dos horas: una es la hora que se utiliza en México y otra hora en timestamp, esta última esta adelantada 6 horas con la primera, por lo que si un día para nosotros es de 0 a 23 horas, en timpestamp sería de 6 a las 5 horas, y como después de las 23 horas siguen las 0 horas y se vuelve otro día, hay que verificar si la hora de la que se va a obtener un intervalo está de las 0 horas hasta las 5, si es así, vamos a añadirle un día al objeto datetime para que respete su hora en timestamp.
 
 Una vez que se haya corroborado que la fecha y la hora del objeto datetime esta correcta, se procede a restarle un segundo al objeto y guardarlo en la variable first_hour y después, al objeto datetime se le suma una hora y se guarda en la variable second_hour, por último, estas variables se retornan en la función.
+
+<a name="getcrudos"></a>
 
 # Función get_crudos
 
@@ -169,6 +188,8 @@ Los valores de horas calculados, el contador_id, plaza_id y fecha se utilizan pa
 Se toma únicamente el primer resultado de este query, y puede que no nos traiga resultados, lo que se interpreta como que no hubo crudos registrados en ese intervalo de tiempo, por lo que se escribe en los logs que no existe información para ese hueco, pero si el query nos trae información, entonces la información del query se va a guardar en un objeto Crudos, el cuál fue modelado para almacenar su información, y este objeto se va a agregar a la lista records. 
 Después de este paso se términa con una iteracón del ciclo for, y una vez que se termine el ciclo, se retorna la lista records.
 
+<a name="generatexml"></a>
+
 # Función generate_xml
 
 > Recibe: crudos: una instancia de la clase Crudos.
@@ -181,6 +202,8 @@ Primero se carga el valor de la propiedad json_text del objeto crudos y se parse
 
 > **Errores**
 >: En ocasiones, en la base de datos en la tabla registros_crudos, los registros no tienen ningún valor en la columna json, por lo que el objeto Crudos generado apartir de este tampoco tenga la propiedad json_text, lo que generará un error y al final el valor de retorno de la función sea None.
+
+<a name="postxml"></a>
 
 # Función post_xml
 

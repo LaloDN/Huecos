@@ -1,6 +1,6 @@
 *.env*
 *.log*
-*xml*
+*xml
 */*
 prueba.py
 .directory
